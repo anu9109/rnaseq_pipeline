@@ -463,9 +463,10 @@
                 },
                 "pseudo_aligner": {
                     "type": "string",
-                    "description": "Specifies the pseudo aligner to use - available options are 'salmon'. Runs in addition to '--aligner'.",
+                    "description": "Specifies the pseudo aligner(s) to use - available options are 'salmon' and 'kallisto'. Runs in addition to '--aligner'.",
+                    "help_text": "Provide a comma-separated list to run more than one pseudo-aligner in the same invocation, e.g. `--pseudo_aligner salmon,kallisto`. Each tool publishes independently (`<outdir>/salmon/`, `<outdir>/kallisto/`) and appears as its own section in the MultiQC report.",
                     "fa_icon": "fas fa-hamburger",
-                    "enum": ["salmon", "kallisto"]
+                    "pattern": "^(salmon|kallisto)(,(salmon|kallisto))*$"
                 },
                 "pseudo_aligner_kmer_size": {
                     "type": "integer",

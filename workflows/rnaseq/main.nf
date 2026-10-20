@@ -7,9 +7,10 @@
 //
 // MODULE: Loaded from modules/local/
 //
-include { DESEQ2_QC as DESEQ2_QC_BAM_SALMON } from '../../modules/local/deseq2_qc'
-include { DESEQ2_QC as DESEQ2_QC_RSEM        } from '../../modules/local/deseq2_qc'
-include { DESEQ2_QC as DESEQ2_QC_PSEUDO      } from '../../modules/local/deseq2_qc'
+include { DESEQ2_QC as DESEQ2_QC_BAM_SALMON   } from '../../modules/local/deseq2_qc'
+include { DESEQ2_QC as DESEQ2_QC_RSEM          } from '../../modules/local/deseq2_qc'
+include { DESEQ2_QC as DESEQ2_QC_PSEUDO_SALMON } from '../../modules/local/deseq2_qc'
+include { DESEQ2_QC as DESEQ2_QC_PSEUDO_KALLISTO } from '../../modules/local/deseq2_qc'
 include { RUSTQC                              } from '../../modules/nf-core/rustqc/main'
 
 //
@@ -25,6 +26,7 @@ include { BAM_DEDUP_UMI                         } from '../../subworkflows/nf-co
 include { checkSamplesAfterGrouping      } from '../../subworkflows/local/utils_nfcore_rnaseq_pipeline'
 include { classifyStrand                 } from '../../subworkflows/local/utils_nfcore_rnaseq_pipeline'
 include { mapBamToPublishedPath          } from '../../subworkflows/local/utils_nfcore_rnaseq_pipeline'
+include { getPseudoAligners              } from '../../subworkflows/local/utils_nfcore_rnaseq_pipeline'
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -56,8 +58,9 @@ include { BAM_STRINGTIE_MERGE              } from '../../subworkflows/nf-core/ba
 include { BEDGRAPH_BEDCLIP_BEDGRAPHTOBIGWIG as BEDGRAPH_BEDCLIP_BEDGRAPHTOBIGWIG_FORWARD } from '../../subworkflows/nf-core/bedgraph_bedclip_bedgraphtobigwig'
 include { BEDGRAPH_BEDCLIP_BEDGRAPHTOBIGWIG as BEDGRAPH_BEDCLIP_BEDGRAPHTOBIGWIG_REVERSE } from '../../subworkflows/nf-core/bedgraph_bedclip_bedgraphtobigwig'
 include { BEDGRAPH_BEDCLIP_BEDGRAPHTOBIGWIG as BEDGRAPH_BEDCLIP_BEDGRAPHTOBIGWIG_COMBINED } from '../../subworkflows/nf-core/bedgraph_bedclip_bedgraphtobigwig'
-include { QUANTIFY_PSEUDO_ALIGNMENT as QUANTIFY_BAM_SALMON } from '../../subworkflows/nf-core/quantify_pseudo_alignment'
-include { QUANTIFY_PSEUDO_ALIGNMENT                         } from '../../subworkflows/nf-core/quantify_pseudo_alignment'
+include { QUANTIFY_PSEUDO_ALIGNMENT as QUANTIFY_BAM_SALMON          } from '../../subworkflows/nf-core/quantify_pseudo_alignment'
+include { QUANTIFY_PSEUDO_ALIGNMENT as QUANTIFY_PSEUDO_ALIGNMENT_SALMON   } from '../../subworkflows/nf-core/quantify_pseudo_alignment'
+include { QUANTIFY_PSEUDO_ALIGNMENT as QUANTIFY_PSEUDO_ALIGNMENT_KALLISTO } from '../../subworkflows/nf-core/quantify_pseudo_alignment'
 include { FASTQ_QC_TRIM_FILTER_SETSTRANDEDNESS              } from '../../subworkflows/nf-core/fastq_qc_trim_filter_setstrandedness'
 
 /*
@@ -97,6 +100,8 @@ workflow RNASEQ {
     def ch_clustering_header_multiqc = file("$projectDir/assets/deseq2_clustering_header.txt", checkIfExists: true)
     def ch_biotypes_header_multiqc   = file("$projectDir/assets/biotypes_header.txt", checkIfExists: true)
     def ch_transcript_fasta_placeholder = ch_pca_header_multiqc
+
+    def pseudo_aligners = getPseudoAligners(params.pseudo_aligner)
 
     // Match the General Statistics column the active aligner emits so the
     // MultiQC fail_mapped row reads consistently with the rest of the report.
@@ -199,7 +204,7 @@ workflow RNASEQ {
 
     // The subworkflow only has to do Salmon indexing if it discovers 'auto'
     // samples, and if we haven't already made one elsewhere
-    salmon_index_available = params.salmon_index || (!params.skip_pseudo_alignment && params.pseudo_aligner == 'salmon')
+    salmon_index_available = params.salmon_index || (!params.skip_pseudo_alignment && 'salmon' in pseudo_aligners)
 
     // Determine if we need to build rRNA removal indexes
     def make_sortmerna_index = !params.sortmerna_index && params.remove_ribo_rna && params.ribo_removal_tool == 'sortmerna'
@@ -765,42 +770,66 @@ workflow RNASEQ {
     }
 
     //
-    // SUBWORKFLOW: Pseudoalignment and quantification with Salmon
+    // SUBWORKFLOW: Pseudoalignment and quantification with Salmon and/or Kallisto
     //
-    if (!params.skip_pseudo_alignment && params.pseudo_aligner) {
+    if (!params.skip_pseudo_alignment) {
 
-        if (params.pseudo_aligner == 'salmon') {
-            ch_pseudo_index = ch_salmon_index
-        } else {
-            ch_pseudo_index = ch_kallisto_index
+        if ('salmon' in pseudo_aligners) {
+            QUANTIFY_PSEUDO_ALIGNMENT_SALMON (
+                ch_samplesheet.map { item -> [ [:], item ] },
+                ch_strand_inferred_filtered_fastq,
+                ch_salmon_index,
+                channel.value(ch_transcript_fasta_placeholder),
+                ch_gtf,
+                params.gtf_group_features,
+                params.gtf_extra_attributes,
+                'salmon',
+                params.kallisto_quant_fraglen,
+                params.kallisto_quant_fraglen_sd,
+                params.skip_quantification_merge
+            )
+            ch_multiqc_files = ch_multiqc_files.mix(QUANTIFY_PSEUDO_ALIGNMENT_SALMON.out.multiqc)
+            ch_mqc_per_sample_bundle = ch_mqc_per_sample_bundle
+                .join(QUANTIFY_PSEUDO_ALIGNMENT_SALMON.out.multiqc.map { meta, f -> [meta.id, f] }, remainder: true)
+
+            if (!params.skip_qc && !params.skip_deseq2_qc && !params.skip_quantification_merge) {
+                DESEQ2_QC_PSEUDO_SALMON (
+                    QUANTIFY_PSEUDO_ALIGNMENT_SALMON.out.counts_gene_length_scaled.map { _meta, counts -> counts },
+                    ch_pca_header_multiqc,
+                    ch_clustering_header_multiqc
+                )
+                ch_multiqc_files = ch_multiqc_files.mix(DESEQ2_QC_PSEUDO_SALMON.out.pca_multiqc.collect().map { file -> [[:], file] })
+                ch_multiqc_files = ch_multiqc_files.mix(DESEQ2_QC_PSEUDO_SALMON.out.dists_multiqc.collect().map { file -> [[:], file] })
+            }
         }
 
-        QUANTIFY_PSEUDO_ALIGNMENT (
-            ch_samplesheet.map { item -> [ [:], item ] },
-            ch_strand_inferred_filtered_fastq,
-            ch_pseudo_index,
-            channel.value(ch_transcript_fasta_placeholder),
-            ch_gtf,
-            params.gtf_group_features,
-            params.gtf_extra_attributes,
-            params.pseudo_aligner,
-            params.kallisto_quant_fraglen,
-            params.kallisto_quant_fraglen_sd,
-            params.skip_quantification_merge
-        )
-        ch_counts_gene_length_scaled = QUANTIFY_PSEUDO_ALIGNMENT.out.counts_gene_length_scaled
-        ch_multiqc_files = ch_multiqc_files.mix(QUANTIFY_PSEUDO_ALIGNMENT.out.multiqc)
-        ch_mqc_per_sample_bundle = ch_mqc_per_sample_bundle
-            .join(QUANTIFY_PSEUDO_ALIGNMENT.out.multiqc.map { meta, f -> [meta.id, f] }, remainder: true)
-
-        if (!params.skip_qc && !params.skip_deseq2_qc && !params.skip_quantification_merge) {
-            DESEQ2_QC_PSEUDO (
-                ch_counts_gene_length_scaled.map { _meta, counts -> counts },
-                ch_pca_header_multiqc,
-                ch_clustering_header_multiqc
+        if ('kallisto' in pseudo_aligners) {
+            QUANTIFY_PSEUDO_ALIGNMENT_KALLISTO (
+                ch_samplesheet.map { item -> [ [:], item ] },
+                ch_strand_inferred_filtered_fastq,
+                ch_kallisto_index,
+                channel.value(ch_transcript_fasta_placeholder),
+                ch_gtf,
+                params.gtf_group_features,
+                params.gtf_extra_attributes,
+                'kallisto',
+                params.kallisto_quant_fraglen,
+                params.kallisto_quant_fraglen_sd,
+                params.skip_quantification_merge
             )
-            ch_multiqc_files = ch_multiqc_files.mix(DESEQ2_QC_PSEUDO.out.pca_multiqc.collect().map { file -> [[:], file] })
-            ch_multiqc_files = ch_multiqc_files.mix(DESEQ2_QC_PSEUDO.out.dists_multiqc.collect().map { file -> [[:], file] })
+            ch_multiqc_files = ch_multiqc_files.mix(QUANTIFY_PSEUDO_ALIGNMENT_KALLISTO.out.multiqc)
+            ch_mqc_per_sample_bundle = ch_mqc_per_sample_bundle
+                .join(QUANTIFY_PSEUDO_ALIGNMENT_KALLISTO.out.multiqc.map { meta, f -> [meta.id, f] }, remainder: true)
+
+            if (!params.skip_qc && !params.skip_deseq2_qc && !params.skip_quantification_merge) {
+                DESEQ2_QC_PSEUDO_KALLISTO (
+                    QUANTIFY_PSEUDO_ALIGNMENT_KALLISTO.out.counts_gene_length_scaled.map { _meta, counts -> counts },
+                    ch_pca_header_multiqc,
+                    ch_clustering_header_multiqc
+                )
+                ch_multiqc_files = ch_multiqc_files.mix(DESEQ2_QC_PSEUDO_KALLISTO.out.pca_multiqc.collect().map { file -> [[:], file] })
+                ch_multiqc_files = ch_multiqc_files.mix(DESEQ2_QC_PSEUDO_KALLISTO.out.dists_multiqc.collect().map { file -> [[:], file] })
+            }
         }
     }
 

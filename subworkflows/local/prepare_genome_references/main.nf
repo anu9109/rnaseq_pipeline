@@ -24,6 +24,8 @@ include { PREPROCESS_TRANSCRIPTS_FASTA_GENCODE } from '../../../modules/local/pr
 include { EAUTILS_GTF2BED                      } from '../../../modules/nf-core/ea-utils/gtf2bed'
 include { CUSTOM_GTFFILTER                     } from '../../../modules/nf-core/custom/gtffilter'
 
+include { getPseudoAligners                    } from '../utils_nfcore_rnaseq_pipeline'
+
 workflow PREPARE_GENOME_REFERENCES {
 
     take:
@@ -39,7 +41,7 @@ workflow PREPARE_GENOME_REFERENCES {
     gffread_transcript_fasta // boolean: use gffread instead of RSEM for transcript FASTA extraction
     featurecounts_group_type // string: The attribute type used to group feature types in the GTF file when generating the biotype plot with featureCounts
     aligner                  // string: Specifies the alignment algorithm to use
-    pseudo_aligner           // string: Specifies the pseudo aligner to use
+    pseudo_aligner           // string: Pseudo aligner(s) to use, comma-separated (e.g. 'salmon' or 'salmon,kallisto')
     skip_gtf_filter          // boolean: Skip filtering of GTF for valid scaffolds and/ or transcript IDs
     ribo_removal_tool        // string: Tool for rRNA removal - 'sortmerna', 'ribodetector', or 'bowtie2' (null if skip)
     skip_alignment           // boolean: Skip all of the alignment-based processes within the pipeline
@@ -49,6 +51,8 @@ workflow PREPARE_GENOME_REFERENCES {
     prokaryotic              // boolean: whether the genome is prokaryotic (CDS-only annotation - use gffread --bed for gene BED since ea-utils/gtf2bed only handles exon features)
 
     main:
+    def pseudo_aligners = getPseudoAligners(pseudo_aligner)
+
     //---------------------------
     // 1) Uncompress GTF or GFF -> GTF
     //---------------------------
@@ -89,7 +93,7 @@ workflow PREPARE_GENOME_REFERENCES {
     //----------------------------------------
     def filter_gtf_needed = (
         (!skip_alignment && aligner) ||
-        (!skip_pseudo_alignment && pseudo_aligner) ||
+        (!skip_pseudo_alignment && pseudo_aligners) ||
         (!transcript_fasta)
     ) && !skip_gtf_filter
 

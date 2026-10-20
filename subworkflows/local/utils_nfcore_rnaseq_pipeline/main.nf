@@ -242,16 +242,34 @@ def checkSamplesAfterGrouping(input) {
 }
 
 //
+// Parse the comma-separated '--pseudo_aligner' value into a validated list, e.g. 'salmon,kallisto' -> ['salmon', 'kallisto']
+//
+def getPseudoAligners(pseudo_aligner_param) {
+    def valid_pseudo_aligners = ['salmon', 'kallisto']
+    def pseudo_aligners = pseudo_aligner_param ? pseudo_aligner_param.split(',').collect { tool -> tool.trim() }.findAll { tool -> tool } : []
+
+    def invalid = pseudo_aligners - valid_pseudo_aligners
+    if (invalid) {
+        error("Invalid value(s) for '--pseudo_aligner': ${invalid.join(', ')}. Valid options are: ${valid_pseudo_aligners.join(', ')} (comma-separated to run more than one).")
+    }
+    if (pseudo_aligners.unique(false).size() != pseudo_aligners.size()) {
+        error("Duplicate value(s) in '--pseudo_aligner': ${pseudo_aligner_param}")
+    }
+    return pseudo_aligners
+}
+
+//
 // Check and validate pipeline parameters
 //
 def validateInputParameters() {
 
     genomeExistsError()
 
-    def pseudo_index_provided = (
-        (params.pseudo_aligner == 'salmon' && params.salmon_index) ||
-        (params.pseudo_aligner == 'kallisto' && params.kallisto_index)
-    )
+    def pseudo_aligners = getPseudoAligners(params.pseudo_aligner)
+    // true only if every requested pseudo-aligner already has a pre-built index
+    def pseudo_index_provided = pseudo_aligners && pseudo_aligners.every { tool ->
+        (tool == 'salmon' && params.salmon_index) || (tool == 'kallisto' && params.kallisto_index)
+    }
 
     if (
         !params.fasta &&
@@ -284,14 +302,9 @@ def validateInputParameters() {
         // (i.e., no pre-built salmon/kallisto index provided). If the user provides a pre-built
         // index that already contains the spike-ins, the combination is valid.
         if (params.additional_fasta) {
-            def needs_to_build_index = false
-            if (!params.skip_pseudo_alignment && params.pseudo_aligner) {
-                // Check if the relevant index for the selected pseudo-aligner is missing
-                if (params.pseudo_aligner == 'salmon' && !params.salmon_index) {
-                    needs_to_build_index = true
-                } else if (params.pseudo_aligner == 'kallisto' && !params.kallisto_index) {
-                    needs_to_build_index = true
-                }
+            // Check if any requested pseudo-aligner is missing its pre-built index
+            def needs_to_build_index = !params.skip_pseudo_alignment && pseudo_aligners.any { tool ->
+                (tool == 'salmon' && !params.salmon_index) || (tool == 'kallisto' && !params.kallisto_index)
             }
             if (needs_to_build_index) {
                 transcriptFastaAdditionalFastaError()
@@ -350,9 +363,9 @@ def validateInputParameters() {
         skipAlignmentWarn()
     }
 
-    if (!params.skip_pseudo_alignment && params.pseudo_aligner) {
-        if (!(params.salmon_index || params.transcript_fasta || (params.fasta && (params.gtf || params.gff)))) {
-            error("To use `--pseudo_aligner 'salmon'`, you must provide either --salmon_index or --transcript_fasta or both --fasta and --gtf / --gff.")
+    if (!params.skip_pseudo_alignment && pseudo_aligners) {
+        if (!(params.transcript_fasta || (params.fasta && (params.gtf || params.gff)) || pseudo_index_provided)) {
+            error("To use '--pseudo_aligner ${pseudo_aligners.join(',')}', you must provide either a pre-built index (--salmon_index / --kallisto_index), --transcript_fasta, or both --fasta and --gtf / --gff.")
         }
     }
 

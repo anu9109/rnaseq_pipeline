@@ -22,6 +22,8 @@ include { HISAT2_BUILD                      } from '../../../modules/nf-core/his
 include { SALMON_INDEX                      } from '../../../modules/nf-core/salmon/index'
 include { KALLISTO_INDEX                    } from '../../../modules/nf-core/kallisto/index'
 include { RSEM_PREPAREREFERENCE as RSEM_PREPAREREFERENCE_GENOME } from '../../../modules/nf-core/rsem/preparereference'
+
+include { getPseudoAligners                 } from '../utils_nfcore_rnaseq_pipeline'
 include { SENTIEON_RSEMPREPAREREFERENCE as SENTIEON_RSEM_PREPAREREFERENCE_GENOME } from '../../../modules/nf-core/sentieon/rsempreparereference'
 
 include { STAR_GENOMEPARAMS_UPGRADE         } from '../../../modules/local/star_genomeparams_upgrade'
@@ -46,7 +48,7 @@ workflow PREPARE_GENOME_INDICES {
     sortmerna_index          // directory: /path/to/sortmerna/index/
     bowtie2_rrna_index       // directory: /path/to/bowtie2/index/
     aligner                  // string: Specifies the alignment algorithm to use - available options are 'star_salmon', 'star_rsem', 'hisat2', and 'bowtie2_salmon'
-    pseudo_aligner           // string: Specifies the pseudo aligner to use - available options are 'salmon'. Runs in addition to '--aligner'
+    pseudo_aligner           // string: Pseudo aligner(s) to use, comma-separated (e.g. 'salmon' or 'salmon,kallisto')
     skip_bbsplit             // boolean: Skip BBSplit for removal of non-reference genome reads
     ribo_removal_tool        // string: Tool for rRNA removal - 'sortmerna', 'ribodetector', or 'bowtie2' (null if skip)
     skip_alignment           // boolean: Skip all of the alignment-based processes within the pipeline
@@ -58,6 +60,7 @@ workflow PREPARE_GENOME_INDICES {
 
     main:
     ch_fasta = ch_fasta_fai.map { _meta, fasta_file, _fai -> fasta_file }
+    def pseudo_aligners = getPseudoAligners(pseudo_aligner)
 
     //------------------------------------------------
     // 1) Determine which indices we actually want built
@@ -67,7 +70,7 @@ workflow PREPARE_GENOME_INDICES {
     if (ribo_removal_tool == 'sortmerna')                        { prepare_tool_indices << 'sortmerna' }
     if (ribo_removal_tool == 'bowtie2' && bowtie2_rrna_index)    { prepare_tool_indices << 'bowtie2_rrna' } // If no index is provided, this subworkflow does not need to build an index as that is handled by the fastq_remove_rrna subworkflow.
     if ((!skip_alignment && aligner) || aligner == 'star_rsem')  { prepare_tool_indices << aligner }
-    if (!skip_pseudo_alignment && pseudo_aligner)                { prepare_tool_indices << pseudo_aligner }
+    if (!skip_pseudo_alignment && pseudo_aligners)                { prepare_tool_indices.addAll(pseudo_aligners) }
 
     //---------------------------------------------------------
     // 2) BBSplit index: uses FASTA only if we generate from scratch
