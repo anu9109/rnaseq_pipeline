@@ -161,6 +161,14 @@ workflow PIPELINE_COMPLETION {
         }
 
         rnaseqSummary(monochrome_logs, pass_mapped_reads, pass_trimmed_reads, pass_strand_check)
+
+        if (workflow.success) {
+            def work_dir = file(workflow.workDir)
+            if (work_dir.exists()) {
+                log.info "Pipeline completed successfully -- removing work directory '${work_dir}'"
+                work_dir.deleteDir()
+            }
+        }
     }
 
     workflow.onError {
