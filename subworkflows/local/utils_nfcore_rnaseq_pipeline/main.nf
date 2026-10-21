@@ -168,6 +168,26 @@ workflow PIPELINE_COMPLETION {
                 log.info "Pipeline completed successfully -- removing work directory '${work_dir}'"
                 work_dir.deleteDir()
             }
+
+            if (params.save_reference) {
+                def genome_dir = file("${outdir}/genome")
+                if (genome_dir.exists()) {
+                    log.info "Removing --save_reference output directory '${genome_dir}'"
+                    genome_dir.deleteDir()
+                }
+            }
+
+            if (params.save_trimmed) {
+                def trimmed_dir = file("${outdir}/${params.trimmer}")
+                if (trimmed_dir.exists()) {
+                    log.info "Removing --save_trimmed FastQ files from '${trimmed_dir}'"
+                    trimmed_dir.eachFileRecurse(groovy.io.FileType.FILES) { f ->
+                        if (f.name.endsWith('.fq.gz') || f.name.endsWith('.fastq.gz')) {
+                            f.delete()
+                        }
+                    }
+                }
+            }
         }
     }
 
