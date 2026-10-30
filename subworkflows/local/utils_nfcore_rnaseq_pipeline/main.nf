@@ -148,6 +148,11 @@ workflow PIPELINE_COMPLETION {
     // Completion email and summary
     //
     workflow.onComplete {
+        // Read workflow state once, up front: `workflow` properties become unreliable
+        // to re-query later in this closure once Nextflow starts tearing down the session.
+        def success  = workflow.success
+        def work_dir = workflow.workDir
+
         if (email || email_on_fail) {
             completionEmail(
                 summary_params,
@@ -162,24 +167,21 @@ workflow PIPELINE_COMPLETION {
 
         rnaseqSummary(monochrome_logs, pass_mapped_reads, pass_trimmed_reads, pass_strand_check)
 
-        if (workflow.success) {
+        if (success) {
+            // Spawn detached shell commands rather than deleting in-process (Path.deleteDir()):
+            // walking/deleting large trees synchronously here was racing with Nextflow's own
+            // session teardown during onComplete and crashing the handler with a NullPointerException.
             try {
-                def work_dir = file(workflow.workDir)
-                if (work_dir.exists()) {
-                    log.info "Pipeline completed successfully -- removing work directory '${work_dir}'"
-                    work_dir.deleteDir()
-                }
+                log.info "Pipeline completed successfully -- removing work directory '${work_dir}'"
+                ["bash", "-c", "rm -rf '${work_dir}'"].execute()
             } catch (Exception e) {
-                log.warn "Could not remove work directory '${workflow.workDir}': ${e.message}"
+                log.warn "Could not remove work directory '${work_dir}': ${e.message}"
             }
 
             if (params.save_reference) {
                 try {
-                    def genome_dir = file("${outdir}/genome")
-                    if (genome_dir.exists()) {
-                        log.info "Removing --save_reference output directory '${genome_dir}'"
-                        genome_dir.deleteDir()
-                    }
+                    log.info "Removing --save_reference output directory '${outdir}/genome'"
+                    ["bash", "-c", "rm -rf '${outdir}/genome'"].execute()
                 } catch (Exception e) {
                     log.warn "Could not remove --save_reference output directory: ${e.message}"
                 }
@@ -187,15 +189,8 @@ workflow PIPELINE_COMPLETION {
 
             if (params.save_trimmed) {
                 try {
-                    def trimmed_dir = file("${outdir}/${params.trimmer}")
-                    if (trimmed_dir.exists()) {
-                        log.info "Removing --save_trimmed FastQ files from '${trimmed_dir}'"
-                        trimmed_dir.eachFileRecurse(groovy.io.FileType.FILES) { f ->
-                            if (f.name.endsWith('.fq.gz') || f.name.endsWith('.fastq.gz')) {
-                                f.delete()
-                            }
-                        }
-                    }
+                    log.info "Removing --save_trimmed FastQ files from '${outdir}/${params.trimmer}'"
+                    ["bash", "-c", "find '${outdir}/${params.trimmer}' -type f \\( -name '*.fq.gz' -o -name '*.fastq.gz' \\) -delete"].execute()
                 } catch (Exception e) {
                     log.warn "Could not remove --save_trimmed FastQ files: ${e.message}"
                 }
