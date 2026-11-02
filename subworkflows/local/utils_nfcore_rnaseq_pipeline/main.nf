@@ -148,11 +148,6 @@ workflow PIPELINE_COMPLETION {
     // Completion email and summary
     //
     workflow.onComplete {
-        // Read workflow state once, up front: `workflow` properties become unreliable
-        // to re-query later in this closure once Nextflow starts tearing down the session.
-        def success  = workflow.success
-        def work_dir = workflow.workDir
-
         if (email || email_on_fail) {
             completionEmail(
                 summary_params,
@@ -167,35 +162,7 @@ workflow PIPELINE_COMPLETION {
 
         rnaseqSummary(monochrome_logs, pass_mapped_reads, pass_trimmed_reads, pass_strand_check)
 
-        if (success) {
-            // Spawn detached shell commands rather than deleting in-process (Path.deleteDir()):
-            // walking/deleting large trees synchronously here was racing with Nextflow's own
-            // session teardown during onComplete and crashing the handler with a NullPointerException.
-            try {
-                log.info "Pipeline completed successfully -- removing work directory '${work_dir}'"
-                ["bash", "-c", "rm -rf '${work_dir}'"].execute()
-            } catch (Exception e) {
-                log.warn "Could not remove work directory '${work_dir}': ${e.message}"
-            }
-
-            if (params.save_reference) {
-                try {
-                    log.info "Removing --save_reference output directory '${outdir}/genome'"
-                    ["bash", "-c", "rm -rf '${outdir}/genome'"].execute()
-                } catch (Exception e) {
-                    log.warn "Could not remove --save_reference output directory: ${e.message}"
-                }
-            }
-
-            if (params.save_trimmed) {
-                try {
-                    log.info "Removing --save_trimmed FastQ files from '${outdir}/${params.trimmer}'"
-                    ["bash", "-c", "find '${outdir}/${params.trimmer}' -type f \\( -name '*.fq.gz' -o -name '*.fastq.gz' \\) -delete"].execute()
-                } catch (Exception e) {
-                    log.warn "Could not remove --save_trimmed FastQ files: ${e.message}"
-                }
-            }
-        }
+        cleanupOnSuccess(outdir)
     }
 
     workflow.onError {
@@ -927,6 +894,43 @@ def mapBamToPublishedPath(bam_path, sample_id, aligner, outdir) {
 
     // Fallback to original filename
     return "${base_dir}/${filename}"
+}
+
+//
+// Remove work dir / --save_reference / --save_trimmed outputs once the pipeline succeeds
+//
+def cleanupOnSuccess(outdir) {
+    if (!workflow.success) {
+        return
+    }
+
+    // Spawn detached shell commands rather than deleting in-process (Path.deleteDir()):
+    // walking/deleting large trees synchronously here was racing with Nextflow's own
+    // session teardown during onComplete and crashing the handler with a NullPointerException.
+    try {
+        log.info "Pipeline completed successfully -- removing work directory '${workflow.workDir}'"
+        ["bash", "-c", "rm -rf '${workflow.workDir}'"].execute()
+    } catch (Exception e) {
+        log.warn "Could not remove work directory '${workflow.workDir}': ${e.message}"
+    }
+
+    if (params.save_reference) {
+        try {
+            log.info "Removing --save_reference output directory '${outdir}/genome'"
+            ["bash", "-c", "rm -rf '${outdir}/genome'"].execute()
+        } catch (Exception e) {
+            log.warn "Could not remove --save_reference output directory: ${e.message}"
+        }
+    }
+
+    if (params.save_trimmed) {
+        try {
+            log.info "Removing --save_trimmed FastQ files from '${outdir}/${params.trimmer}'"
+            ["bash", "-c", "find '${outdir}/${params.trimmer}' -type f \\( -name '*.fq.gz' -o -name '*.fastq.gz' \\) -delete"].execute()
+        } catch (Exception e) {
+            log.warn "Could not remove --save_trimmed FastQ files: ${e.message}"
+        }
+    }
 }
 
 //
